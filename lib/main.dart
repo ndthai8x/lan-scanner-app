@@ -13,7 +13,7 @@ class LanScannerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Tool Đức Thái 0909272412',
+      title: 'Camera,Vi tính Đức Thái 0909272412',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -28,20 +28,14 @@ class LanScannerApp extends StatelessWidget {
 
 class DeviceItem {
   final String ip;
-  String mac;
-  String vendor;
-  String hostName;
   int pingMs;
   bool hasWeb;
   bool isGateway;
-  String deviceType;
+  String deviceType; // 'camera', 'router', 'pc', 'generic'
   List<int> openPorts;
 
   DeviceItem({
     required this.ip,
-    this.mac = 'Không xác định',
-    this.vendor = 'éo rõ',
-    this.hostName = '',
     this.pingMs = -1,
     this.hasWeb = false,
     this.isGateway = false,
@@ -63,29 +57,12 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   double _progress = 0.0;
   final List<DeviceItem> _devices = [];
 
-  final Map<String, String> _vendorPrefixes = {
-    'B4:2E:99': 'GIGA-BYTE TECHNOLOGY CO.,LTD',
-    '00:12:33': 'JRC TOKKI Co.,Ltd',
-    'E0:2E:FE': 'Apple Inc.',
-    'E4:60:4D': 'Network Router / AP',
-    '44:03:A7': 'Hikvision Digital',
-    '50:C7:BF': 'TP-Link Corporation',
-    '3C:CD:36': 'Dahua Technology',
-    'BC:54:51': 'Xiaomi Communications',
-    '00:0C:29': 'VMware, Inc.',
-    'D8:32:14': 'Samsung Electronics',
-    '70:4F:57': 'Intel Corporate',
-  };
-
-  String _lookupVendor(String mac) {
-    if (mac.length >= 8) {
-      String prefix = mac.substring(0, 8).toUpperCase();
-      if (_vendorPrefixes.containsKey(prefix)) {
-        return _vendorPrefixes[prefix]!;
-      }
-    }
-    return 'éo rõ';
-  }
+  // Danh mục các port dùng để phát hiện nhanh thiết bị trên mạng LAN
+  final List<int> _discoveryPorts = [
+    80, 81, 88, 443, 8080, 8888, // Các cổng Web quản trị
+    554, 8000, 34567, 37777,      // Cổng Camera: RTSP, Hikvision, Xiongmai/CMS, Dahua
+    22, 23, 445                   // SSH, Telnet, SMB
+  ];
 
   @override
   void initState() {
@@ -95,8 +72,8 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
 
   Future<void> _detectLocalSubnet() async {
     try {
-      for (var interface in await NetworkInterface.list()) {
-        for (var addr in interface.addresses) {
+      for (var iface in await NetworkInterface.list()) {
+        for (var addr in iface.addresses) {
           if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
             List<String> parts = addr.address.split('.');
             if (parts.length == 4) {
@@ -111,27 +88,6 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
     } catch (_) {}
   }
 
-  Future<Map<String, String>> _readArpTable() async {
-    Map<String, String> arpMap = {};
-    try {
-      final file = File('/proc/net/arp');
-      if (await file.exists()) {
-        final lines = await file.readAsLines();
-        for (var line in lines.skip(1)) {
-          final parts = line.split(RegExp(r'\s+'));
-          if (parts.length >= 4) {
-            String ip = parts[0];
-            String mac = parts[3];
-            if (mac != '00:00:00:00:00:00') {
-              arpMap[ip] = mac.toUpperCase();
-            }
-          }
-        }
-      }
-    } catch (_) {}
-    return arpMap;
-  }
-
   Future<void> _startScan() async {
     String subnet = _subnetController.text.trim();
     if (subnet.isEmpty) return;
@@ -142,7 +98,6 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       _devices.clear();
     });
 
-    List<int> testPorts = [80, 443, 554, 8000, 37777, 22, 445];
     int total = 254;
     int completed = 0;
     List<Future> batch = [];
@@ -153,14 +108,14 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       batch.add(() async {
         final stopwatch = Stopwatch()..start();
         bool alive = false;
-        List<int> detectedPorts = [];
+        List<int> foundPorts = [];
 
-        for (int p in testPorts) {
+        for (int p in _discoveryPorts) {
           try {
-            final socket = await Socket.connect(targetIp, p, timeout: const Duration(milliseconds: 320));
-            socket.destroy();
+            final s = await Socket.connect(targetIp, p, timeout: const Duration(milliseconds: 280));
+            s.destroy();
             alive = true;
-            detectedPorts.add(p);
+            foundPorts.add(p);
           } catch (_) {}
         }
         stopwatch.stop();
@@ -169,19 +124,22 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
           DeviceItem item = DeviceItem(
             ip: targetIp,
             pingMs: stopwatch.elapsedMilliseconds,
-            openPorts: detectedPorts,
+            openPorts: foundPorts,
           );
 
-          if (detectedPorts.contains(80) || detectedPorts.contains(443)) {
+          // Nhận diện Web nếu mở bất kỳ cổng web thông dụng nào
+          if (foundPorts.any((p) => [80, 81, 88, 443, 8080, 8888].contains(p))) {
             item.hasWeb = true;
           }
-          if (detectedPorts.contains(554) || detectedPorts.contains(8000)) {
+
+          // Nhận diện thiết bị Camera / Đầu ghi hình
+          if (foundPorts.any((p) => [554, 8000, 34567, 37777].contains(p))) {
             item.deviceType = 'camera';
-          } else if (detectedPorts.contains(37777)) {
-            item.deviceType = 'nvr';
           } else if (i == 1 || i == 254) {
             item.isGateway = true;
             item.deviceType = 'router';
+          } else if (foundPorts.contains(445)) {
+            item.deviceType = 'pc';
           }
 
           setState(() {
@@ -207,14 +165,6 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       await Future.wait(batch);
     }
 
-    Map<String, String> arpTable = await _readArpTable();
-    for (var dev in _devices) {
-      if (arpTable.containsKey(dev.ip)) {
-        dev.mac = arpTable[dev.ip]!;
-        dev.vendor = _lookupVendor(dev.mac);
-      }
-    }
-
     setState(() {
       _isScanning = false;
       _progress = 1.0;
@@ -234,7 +184,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       backgroundColor: const Color(0xFF1E2638),
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => PortScanSheet(ip: item.ip),
+      builder: (context) => PortScanSheet(ip: item.ip, initialOpenPorts: item.openPorts),
     );
   }
 
@@ -242,10 +192,10 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
     switch (type) {
       case 'camera':
         return const Icon(Icons.videocam, color: Colors.amber, size: 28);
-      case 'nvr':
-        return const Icon(Icons.dns, color: Colors.orange, size: 28);
       case 'router':
         return const Icon(Icons.router, color: Colors.blueAccent, size: 28);
+      case 'pc':
+        return const Icon(Icons.computer, color: Colors.tealAccent, size: 28);
       default:
         return const Icon(Icons.devices, color: Colors.cyan, size: 28);
     }
@@ -255,7 +205,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tool mạng - ĐứcThái 0909272412', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        title: const Text('Camera,Vi tính - Đức Thái 0909272412', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: const Color(0xFF182030),
         elevation: 0,
       ),
@@ -320,7 +270,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
                     borderRadius: BorderRadius.circular(12),
                     onTap: () => _showPortScanModal(d),
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(14),
                       child: Row(
                         children: [
                           _buildTypeIcon(d.deviceType),
@@ -358,34 +308,12 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
                                 const SizedBox(height: 4),
                                 Row(
                                   children: [
-                                    Text('MAC: ${d.mac}', style: TextStyle(fontSize: 13, color: Colors.grey[400])),
-                                    if (d.mac != 'Không xác định' && d.mac != 'Đang lấy...')
-                                      IconButton(
-                                        icon: const Icon(Icons.copy, size: 15, color: Colors.grey),
-                                        onPressed: () => _copy(d.mac, 'MAC'),
-                                        padding: const EdgeInsets.only(left: 4),
-                                        constraints: const BoxConstraints(),
-                                      ),
+                                    if (d.pingMs >= 0)
+                                      Text('Độ trễ: ${d.pingMs} ms', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                                    const SizedBox(width: 12),
+                                    Text('Cổng mở: ${d.openPorts.length}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
                                   ],
                                 ),
-                                if (d.vendor != 'Không rõ' || d.pingMs >= 0)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 2),
-                                    child: Row(
-                                      children: [
-                                        if (d.pingMs >= 0)
-                                          Text('Ping: ${d.pingMs}ms   ', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                                        if (d.vendor != 'éo rõ')
-                                          Flexible(
-                                            child: Text(
-                                              d.vendor,
-                                              style: const TextStyle(fontSize: 12, color: Colors.orangeAccent),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
                               ],
                             ),
                           ),
@@ -405,24 +333,32 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
 
 class PortScanSheet extends StatefulWidget {
   final String ip;
-  const PortScanSheet({super.key, required this.ip});
+  final List<int> initialOpenPorts;
+  const PortScanSheet({super.key, required this.ip, required this.initialOpenPorts});
 
   @override
   State<PortScanSheet> createState() => _PortScanSheetState();
 }
 
 class _PortScanSheetState extends State<PortScanSheet> {
-  final Map<int, String> _commonPorts = {
+  // Danh mục chi tiết các cổng phổ biến
+  final Map<int, String> _portDefinitions = {
     21: 'FTP (Truyền file)',
-    22: 'SSH (Quản trị từ xa)',
-    23: 'Telnet',
-    80: 'HTTP (Trang Web)',
-    443: 'HTTPS (Web Bảo mật)',
-    445: 'SMB (Chia sẻ file)',
-    554: 'RTSP (Luồng Video Camera)',
-    8000: 'Hikvision / DVR Port',
-    8080: 'HTTP Proxy/Web thay thế',
-    37777: 'Dahua DVR/NVR Port',
+    22: 'SSH (Quản trị mạng từ xa)',
+    23: 'Telnet (Giao diện dòng lệnh)',
+    53: 'DNS',
+    80: 'HTTP (Trang Web quản trị)',
+    81: 'HTTP (Web phụ / Camera Web)',
+    88: 'HTTP (Web phụ)',
+    443: 'HTTPS (Web bảo mật SSL)',
+    445: 'SMB (Chia sẻ file nội bộ)',
+    554: 'RTSP (Luồng Video Stream)',
+    1935: 'RTMP (Stream Video)',
+    8000: 'Hikvision / DVR Service Port',
+    8080: 'HTTP Proxy / Web thay thế',
+    8888: 'HTTP Web Port',
+    34567: 'Xiongmai / CMS Port (Đầu ghi/Cam)',
+    37777: 'Dahua TCP Service Port',
   };
 
   final List<int> _openPorts = [];
@@ -431,17 +367,19 @@ class _PortScanSheetState extends State<PortScanSheet> {
   @override
   void initState() {
     super.initState();
+    _openPorts.addAll(widget.initialOpenPorts);
     _scanAllPorts();
   }
 
   Future<void> _scanAllPorts() async {
-    for (var port in _commonPorts.keys) {
+    for (var port in _portDefinitions.keys) {
+      if (_openPorts.contains(port)) continue;
       try {
-        final s = await Socket.connect(widget.ip, port, timeout: const Duration(milliseconds: 350));
+        final s = await Socket.connect(widget.ip, port, timeout: const Duration(milliseconds: 320));
         s.destroy();
         if (mounted) {
           setState(() {
-            _openPorts.add(port);
+            if (!_openPorts.contains(port)) _openPorts.add(port);
           });
         }
       } catch (_) {}
@@ -449,6 +387,7 @@ class _PortScanSheetState extends State<PortScanSheet> {
     if (mounted) {
       setState(() {
         _scanningPorts = false;
+        _openPorts.sort();
       });
     }
   }
@@ -464,30 +403,31 @@ class _PortScanSheetState extends State<PortScanSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Quét Cổng: ${widget.ip}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Cổng Mở: ${widget.ip}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               if (_scanningPorts)
-                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blueAccent)),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           const Divider(),
           Flexible(
             child: _openPorts.isEmpty && !_scanningPorts
-                ? const Center(child: Padding(padding: EdgeInsets.all(20), child: Text('Không tìm thấy cổng mở thông dụng nào.')))
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 30),
+                    child: Center(child: Text('éo tìm thấy cổng mở thông dụng nào.', style: TextStyle(color: Colors.grey))),
+                  )
                 : ListView(
                     shrinkWrap: true,
-                    children: _commonPorts.entries.map((entry) {
-                      bool isOpen = _openPorts.contains(entry.key);
+                    children: _openPorts.map((port) {
+                      String desc = _portDefinitions[port] ?? 'Dịch vụ tùy chỉnh';
                       return ListTile(
                         dense: true,
-                        leading: Icon(
-                          isOpen ? Icons.check_circle : Icons.remove_circle_outline,
-                          color: isOpen ? Colors.greenAccent : Colors.grey[700],
-                        ),
-                        title: Text('Port ${entry.key}: ${entry.value}'),
-                        trailing: Text(
-                          isOpen ? 'MỞ (OPEN)' : 'ĐÓNG',
-                          style: TextStyle(color: isOpen ? Colors.greenAccent : Colors.grey, fontWeight: FontWeight.bold),
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.check_circle, color: Colors.greenAccent),
+                        title: Text('Port $port: $desc', style: const TextStyle(fontWeight: FontWeight.w600)),
+                        trailing: const Text(
+                          'MỞ (OPEN)',
+                          style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
                         ),
                       );
                     }).toList(),
