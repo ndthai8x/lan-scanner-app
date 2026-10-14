@@ -225,7 +225,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Công Cụ Dò Quét Mạng LAN', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Tool Quét Mạng - Thái xalem 0909272412', style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: const Color(0xFF182030),
         elevation: 0,
       ),
