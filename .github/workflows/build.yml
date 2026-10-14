@@ -27,6 +27,7 @@ jobs:
       - name: Recreate Android Project Platform
         run: |
           flutter create --platforms=android --project-name lan_scanner_app .
+          sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 28/g' android/app/build.gradle || true
 
       - name: Install dependencies
         run: flutter pub get
